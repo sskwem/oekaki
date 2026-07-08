@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>おえかき</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<!-- ホーム画面に追加するとフルスクリーンで起動 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="おえかき">
+<style>
+  :root {
+    --paper: #FFF9F0;          /* 画用紙の色 */
+    --tray-bg: rgba(255, 255, 255, 0.88);
+    --shadow: rgba(90, 70, 50, 0.20);
+    --btn: 58px;               /* パレットボタンの直径 */
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html, body {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    background: var(--paper);
+  }
+
+  #canvas {
+    position: fixed;
+    inset: 0;
+    touch-action: none;
+  }
+
+  /* ---- パレット ---- */
+  #tray {
+    position: fixed;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--tray-bg);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border-radius: 999px;
+    box-shadow: 0 6px 24px var(--shadow);
+    touch-action: none;
+  }
+
+  .swatch {
+    width: var(--btn);
+    height: var(--btn);
+    border: none;
+    cursor: pointer;
+    /* 絵の具のしずくのような有機的な形（このアプリの顔） */
+    border-radius: 47% 53% 51% 49% / 52% 47% 53% 48%;
+    transition: transform 0.25s cubic-bezier(0.34, 1.8, 0.5, 1);
+    touch-action: none;
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .swatch.selected {
+    transform: scale(1.28) rotate(-6deg);
+    box-shadow: 0 0 0 4px #fff, 0 0 0 7px rgba(90, 70, 50, 0.25);
+  }
+
+  /* 消しゴム */
+  .swatch.eraser {
+    background: var(--paper);
+    border: 3px dashed rgba(90, 70, 50, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .swatch.eraser svg { width: 55%; height: 55%; }
+
+  /* 区切り */
+  .divider {
+    width: 2px;
+    height: calc(var(--btn) * 0.6);
+    background: rgba(90, 70, 50, 0.15);
+    border-radius: 2px;
+    flex-shrink: 0;
+  }
+
+  /* ぜんぶ消すボタン（長押しで発動） */
+  #clearBtn {
+    width: var(--btn);
+    height: var(--btn);
+    border: none;
+    border-radius: 50%;
+    background: #F0EBE2;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    touch-action: none;
+    flex-shrink: 0;
+  }
+  #clearBtn svg.icon {
+    width: 50%;
+    height: 50%;
+    stroke: #8A7B68;
+  }
+  #clearBtn .ring {
+    position: absolute;
+    inset: -4px;
+    pointer-events: none;
+  }
+  #clearBtn .ring circle {
+    fill: none;
+    stroke: #E2574C;
+    stroke-width: 4;
+    stroke-linecap: round;
+    stroke-dasharray: 207;   /* 2 * PI * 33 */
+    stroke-dashoffset: 207;
+    transform: rotate(-90deg);
+    transform-origin: center;
+  }
+
+  /* まっさらに戻るときのひとしごと */
+  #wipe {
+    position: fixed;
+    inset: 0;
+    background: var(--paper);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease-out;
+  }
+  #wipe.show { opacity: 1; }
+
+  /* 小さい画面（iPhoneなど）ではボタンを縮小 */
+  @media (max-width: 740px) {
+    :root { --btn: 42px; }
+    #tray { gap: 8px; padding: 9px 12px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .swatch { transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+<div id="wipe"></div>
+
+<div id="tray">
+  <!-- 色ボタンはJSで生成 -->
+  <span class="divider"></span>
+  <button id="clearBtn" aria-label="ぜんぶ消す（長押し）">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke-width="2.4"
+         stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 7h16"/>
+      <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+      <path d="M6 7l1 12a1.5 1.5 0 0 0 1.5 1.4h7A1.5 1.5 0 0 0 17 19l1-12"/>
+    </svg>
+    <svg class="ring" viewBox="0 0 74 74">
+      <circle cx="37" cy="37" r="33"/>
+    </svg>
+  </button>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var PAPER = '#FFF9F0';
+  var BRUSH = 17;          // 通常の筆の太さ（CSSピクセル）
+  var ERASER_SIZE = 46;    // 消しゴムの太さ
+
+  // クレヨンらしい発色の8色 + 消しゴム
+  var COLORS = [
+    '#E8413A', // あか
+    '#F58B1F', // オレンジ
+    '#F7CF3C', // きいろ
+    '#4CAF50', // みどり
+    '#2E93D9', // あお
+    '#8E5BD8', // むらさき
+    '#F480B1', // ピンク
+    '#403B36'  // くろ
+  ];
+
+  var canvas = document.getElementById('canvas');
+  var ctx = canvas.getContext('2d');
+  var tray = document.getElementById('tray');
+  var clearBtn = document.getElementById('clearBtn');
+  var wipe = document.getElementById('wipe');
+
+  var current = { color: COLORS[0], size: BRUSH };
+
+  /* ---------- キャンバス初期化・リサイズ（描いた絵は保持） ---------- */
+  var dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+  function resize() {
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+
+    var prev = null;
+    if (canvas.width > 0 && canvas.height > 0) {
+      prev = document.createElement('canvas');
+      prev.width = canvas.width;
+      prev.height = canvas.height;
+      prev.getContext('2d').drawImage(canvas, 0, 0);
+    }
+
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, w, h);
+
+    if (prev) ctx.drawImage(prev, 0, 0, prev.width, prev.height, 0, 0, w, h);
+  }
+
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', function () {
+    setTimeout(resize, 300);
+  });
+  resize();
+
+  /* ---------- 描画（何本の指でも同時に描ける） ---------- */
+  // 指ごとに軌跡を追跡。ストロークは書き始めの色を最後まで使う。
+  var strokes = new Map();
+
+  function drawDot(x, y, s) {
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(x, y, s.size / 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawSegment(s, x, y) {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = s.size;
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    s.x = x;
+    s.y = y;
+  }
+
+  canvas.addEventListener('touchstart', function (e) {
+    e.preventDefault();
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      var s = { x: t.clientX, y: t.clientY, color: current.color, size: current.size };
+      strokes.set(t.identifier, s);
+      drawDot(t.clientX, t.clientY, s); // タップだけでも点が残る
+    }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', function (e) {
+    e.preventDefault();
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      var s = strokes.get(t.identifier);
+      if (s) drawSegment(s, t.clientX, t.clientY);
+    }
+  }, { passive: false });
+
+  function endTouches(e) {
+    e.preventDefault();
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      strokes.delete(e.changedTouches[i].identifier);
+    }
+  }
+  canvas.addEventListener('touchend', endTouches, { passive: false });
+  canvas.addEventListener('touchcancel', endTouches, { passive: false });
+
+  // PCでの動作確認用（マウス）
+  var mouseStroke = null;
+  canvas.addEventListener('mousedown', function (e) {
+    mouseStroke = { x: e.clientX, y: e.clientY, color: current.color, size: current.size };
+    drawDot(e.clientX, e.clientY, mouseStroke);
+  });
+  window.addEventListener('mousemove', function (e) {
+    if (mouseStroke) drawSegment(mouseStroke, e.clientX, e.clientY);
+  });
+  window.addEventListener('mouseup', function () { mouseStroke = null; });
+
+  /* ---------- パレット生成 ---------- */
+  var swatches = [];
+
+  function select(btn, color, size) {
+    current.color = color;
+    current.size = size;
+    swatches.forEach(function (b) {
+      b.classList.toggle('selected', b === btn);
+    });
+  }
+
+  function addSwatch(btn, color, size) {
+    swatches.push(btn);
+    function onPick(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      select(btn, color, size);
+    }
+    btn.addEventListener('touchstart', onPick, { passive: false });
+    btn.addEventListener('mousedown', onPick);
+  }
+
+  var divider = tray.querySelector('.divider');
+  COLORS.forEach(function (color) {
+    var btn = document.createElement('button');
+    btn.className = 'swatch';
+    btn.style.background = color;
+    btn.setAttribute('aria-label', 'いろ ' + color);
+    tray.insertBefore(btn, divider);
+    addSwatch(btn, color, BRUSH);
+  });
+
+  // 消しゴム
+  var eraserBtn = document.createElement('button');
+  eraserBtn.className = 'swatch eraser';
+  eraserBtn.setAttribute('aria-label', 'けしゴム');
+  eraserBtn.innerHTML =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="#8A7B68" stroke-width="2.2" ' +
+    'stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M20 20H8L3.6 15.6a2 2 0 0 1 0-2.8l8.2-8.2a2 2 0 0 1 2.8 0l5 5a2 2 0 0 1 0 2.8L13 19"/>' +
+    '<path d="M8.5 8.5l7 7"/></svg>';
+  tray.insertBefore(eraserBtn, divider);
+  addSwatch(eraserBtn, PAPER, ERASER_SIZE);
+
+  // 初期選択は赤
+  select(swatches[0], COLORS[0], BRUSH);
+
+  /* ---------- ぜんぶ消す（誤操作防止のため1秒長押し） ---------- */
+  var HOLD_MS = 1000;
+  var ringCircle = clearBtn.querySelector('.ring circle');
+  var RING_LEN = 207;
+  var holdStart = null;
+  var holdRAF = null;
+
+  function clearCanvas() {
+    strokes.clear();
+    ctx.fillStyle = PAPER;
+    ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+    wipe.classList.add('show');
+    setTimeout(function () { wipe.classList.remove('show'); }, 200);
+  }
+
+  function holdTick(now) {
+    var p = Math.min((now - holdStart) / HOLD_MS, 1);
+    ringCircle.style.strokeDashoffset = RING_LEN * (1 - p);
+    if (p >= 1) {
+      cancelHold();
+      clearCanvas();
+    } else {
+      holdRAF = requestAnimationFrame(holdTick);
+    }
+  }
+
+  function startHold(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    holdStart = performance.now();
+    holdRAF = requestAnimationFrame(holdTick);
+  }
+
+  function cancelHold() {
+    if (holdRAF) cancelAnimationFrame(holdRAF);
+    holdRAF = null;
+    holdStart = null;
+    ringCircle.style.strokeDashoffset = RING_LEN;
+  }
+
+  clearBtn.addEventListener('touchstart', startHold, { passive: false });
+  clearBtn.addEventListener('touchend', cancelHold);
+  clearBtn.addEventListener('touchcancel', cancelHold);
+  clearBtn.addEventListener('mousedown', startHold);
+  window.addEventListener('mouseup', cancelHold);
+
+  /* ---------- iOSのジェスチャを徹底的に抑止 ---------- */
+  // Safariのピンチズーム
+  document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
+  document.addEventListener('gesturechange', function (e) { e.preventDefault(); });
+  // ダブルタップズーム
+  document.addEventListener('dblclick', function (e) { e.preventDefault(); });
+  // 長押しメニュー
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  // トレイ以外での画面スクロールの取りこぼし
+  document.body.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+})();
+</script>
+</body>
+</html>
