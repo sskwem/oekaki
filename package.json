@@ -1,0 +1,13 @@
+{
+  "name": "oekaki",
+  "version": "1.0.0",
+  "description": "幼児向けマルチタッチお絵かきWebアプリ（単一HTML）",
+  "private": true,
+  "scripts": {
+    "test": "node tests/oekaki.test.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "playwright": "^1.61.1"
+  }
+}
