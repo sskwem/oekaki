@@ -423,7 +423,10 @@
     e.preventDefault();
     e.stopPropagation();
     for (var i = 0; i < e.changedTouches.length; i++) {
-      startHold(e.changedTouches[i].identifier);
+      var t = e.changedTouches[i];
+      // ボタン上で始まった指だけを対象にする（ブラウザによっては、同時に触れた
+      // 別の要素の指も changedTouches に入るため。target は内側の svg のこともある）
+      if (clearBtn.contains(t.target)) startHold(t.identifier);
     }
   }, { passive: false });
 
