@@ -92,6 +92,8 @@ function makeTouch(cdp, endMode) {
       else await send('touchEnd', all()); // remaining(diff)方式
     },
     async endAll() { const ids = [...pts.keys()]; for (const id of ids) await this.end(id); },
+    // CDP の touchCancel は touchPoints を空にしないとエラーになる
+    async cancel() { pts.clear(); await send('touchCancel', []); },
   };
 }
 
@@ -363,6 +365,177 @@ function makeTouch(cdp, endMode) {
     report(10, 'パレット操作: スワッチのタッチで下のキャンバスに描画されない', pass,
       `タップ前=${fmt(before)} タップ後=${fmt(after)}(紙色のまま) 選択反映=${sel[yellowIdx]}`);
   } catch (e) { report(10, 'パレットの操作性', false, String(e)); }
+
+  /* ---------- 全消しテスト共通: 赤いマーカー線を引き、消えたかどうかで判定 ---------- */
+  const clearCenter = () => page.evaluate(() => {
+    const r = document.getElementById('clearBtn').getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  const ringOffset = () => page.evaluate(() =>
+    parseFloat(document.querySelector('#clearBtn .ring circle').style.strokeDashoffset));
+  async function drawMarker() {
+    await tapSwatch(await swatchIndexByColor('rgb(232,65,58)'));
+    await drawLine(1, 200, 300, 500, 300);
+    const c = await px(350, 300);
+    if (!near(c, RED)) throw new Error(`マーカーが描けていない: ${fmt(c)}`);
+  }
+  const markerCleared = async () => near(await px(350, 300), PAPER, 3);
+
+  /* ---------- [11] 全消し: 「1本の指が1秒押し続けたときだけ」消える（多指で安全装置を迂回できない） ---------- */
+  try {
+    const cb = await clearCenter();
+    const A = [21, cb.x - 6, cb.y];
+    const B = [22, cb.x + 6, cb.y];
+    const scenarios = {
+      // A を押したまま B が触れて離れる → 即消去されない。A を離した後も残ったループで消えない
+      '片方だけ離す': async () => {
+        await touch.start(...A); await wait(100);
+        await touch.start(...B); await wait(100);
+        await touch.end(22); await wait(100);
+        if (await markerCleared()) return 'B を離した直後に消去';
+        await touch.end(21);
+      },
+      // 長押し中に触れた B は引き継がない: A が離れたら B が押し続けても消えない
+      '後から触れた指だけが残る': async () => {
+        await touch.start(...A); await wait(100);
+        await touch.start(...B); await wait(100);
+        await touch.end(21);
+        await wait(1150);
+        if (await markerCleared()) return 'B だけで消去';
+        await touch.end(22);
+      },
+      '両方離す': async () => {
+        await touch.start(...A); await wait(100);
+        await touch.start(...B); await wait(100);
+        await touch.end(21); await touch.end(22);
+      },
+      // 常にどちらかの指が触れているが、どの指も1秒は押していない
+      '交互タップ': async () => {
+        await touch.start(...A); await wait(60);
+        for (let i = 0; i < 4; i++) {
+          await touch.start(...B); await wait(60);
+          await touch.end(21); await wait(60);
+          await touch.start(...A); await wait(60);
+          await touch.end(22); await wait(60);
+        }
+        await touch.end(21);
+      },
+      'touchcancel': async () => {
+        await touch.start(...A); await wait(100);
+        await touch.start(...B); await wait(100);
+        await touch.cancel();
+      },
+    };
+    await drawMarker();
+    const bad = [];
+    for (const [name, run] of Object.entries(scenarios)) {
+      const early = await run();
+      await wait(1150); // 孤立した長押しループがあればこの間に消える
+      const ring = await ringOffset();
+      if (early || await markerCleared() || ring !== 207) {
+        bad.push(`${name}: ${early || '消去された'} ring=${ring}`);
+        await drawMarker();
+      }
+    }
+    // 対照: 2本指で押し続ければ1秒で消える（多指でも長押し自体は機能する）
+    await touch.start(...A); await wait(100);
+    await touch.start(...B); await wait(1150);
+    const positive = await markerCleared();
+    await touch.endAll();
+    report(11, '全消し(2本指): 片方の解放・後から触れた指・交互タップ・touchcancelで消えず、押し続ければ消える',
+      bad.length === 0 && positive,
+      `${bad.length ? '失敗シナリオ=' + bad.join(' / ') : `${Object.keys(scenarios).length}シナリオとも消えず ring=207`} 2本指で1.25秒長押し=${positive ? '消去' : '消えない'}`);
+  } catch (e) { report(11, '全消し(2本指)', false, String(e)); }
+
+  /* ---------- [12] 全消し: 指がボタンから外れたら取り消す ---------- */
+  try {
+    await drawMarker();
+    const cb = await clearCenter();
+    await touch.start(31, cb.x, cb.y);
+    for (let i = 1; i <= 10; i++) await touch.move(31, cb.x, cb.y - 40 * i); // 400px上のキャンバスへ
+    await wait(1250);
+    const slidOut = await markerCleared();
+    const ring = await ringOffset();
+    await touch.end(31);
+    // 対照: ボタン内の小さな揺れ（±10px）では取り消されない
+    await touch.start(32, cb.x, cb.y);
+    for (const dx of [8, -10, 6, -4]) { await touch.move(32, cb.x + dx, cb.y + dx / 2); await wait(100); }
+    await wait(850);
+    const jitter = await markerCleared();
+    await touch.end(32);
+    report(12, '全消し(スライドアウト): ボタン外へ指を動かすと取り消し、小さな揺れでは継続', !slidOut && ring === 207 && jitter,
+      `外へ移動して1.25秒=${slidOut ? '消去された' : '消えない'} ring=${ring} ±10px揺れ=${jitter ? '消去' : '消えない'}`);
+  } catch (e) { report(12, '全消し(スライドアウト)', false, String(e)); }
+
+  /* ---------- [13] 全消し: マウス操作 ---------- */
+  try {
+    await drawMarker();
+    const cb = await clearCenter();
+    // 左を押したまま外へ移動 → 消えない
+    await page.mouse.move(cb.x, cb.y);
+    await page.mouse.down();
+    await page.mouse.move(cb.x, cb.y - 400, { steps: 5 });
+    await wait(1250);
+    const slidOut = await markerCleared();
+    await page.mouse.up();
+    // 左を押したまま右クリック → 即消去されない（旧実装は二重ループで即消去）
+    await page.mouse.move(cb.x, cb.y);
+    await page.mouse.down();
+    await wait(100);
+    await page.mouse.down({ button: 'right' });
+    await wait(100);
+    await page.mouse.up({ button: 'right' });
+    await wait(100);
+    const rightEarly = await markerCleared();
+    await page.mouse.up();
+    await wait(1100);
+    const rightLate = await markerCleared();
+    // 対照: 左ボタンで1.25秒長押し → 消える
+    await page.mouse.move(cb.x, cb.y);
+    await page.mouse.down();
+    await wait(1250);
+    const positive = await markerCleared();
+    await page.mouse.up();
+    report(13, '全消し(マウス): 外へ移動・右ボタン併用では消えず、左長押しで消える',
+      !slidOut && !rightEarly && !rightLate && positive,
+      `外へ移動=${slidOut ? '消去' : '消えない'} 右ボタン併用=${rightEarly || rightLate ? '消去' : '消えない'} 左1.25秒=${positive ? '消去' : '消えない'}`);
+  } catch (e) { report(13, '全消し(マウス)', false, String(e)); }
+
+  /* ---------- [14] レイアウト: どの画面サイズでも全ボタンが画面内にあり押せる ---------- */
+  try {
+    const viewports = [
+      [320, 568, 2], [375, 667, 2], [393, 852, 3], [430, 932, 3],      // iPhone 縦 / Slide Over
+      [568, 320, 2], [667, 375, 2], [852, 393, 3],                     // iPhone 横
+      [744, 1133, 2], [820, 1180, 2], [1194, 834, 2], [1024, 1366, 2], [1366, 1024, 2], // iPad
+    ];
+    const bad = [];
+    const notes = [];
+    for (const [w, h, dpr] of viewports) {
+      const ctx2 = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: dpr, isMobile: true, hasTouch: true });
+      const p2 = await ctx2.newPage();
+      await p2.goto(url, { waitUntil: 'load' });
+      const r = await p2.evaluate(() => {
+        const W = innerWidth, H = innerHeight, issues = [];
+        const btns = [...document.querySelectorAll('#tray .swatch, #clearBtn')];
+        for (const b of btns) {
+          const rc = b.getBoundingClientRect(); // transform（選択中の拡大）込み
+          const name = b.getAttribute('aria-label');
+          if (rc.left < 0 || rc.top < 0 || rc.right > W || rc.bottom > H) issues.push(`${name}が画面外(${Math.round(rc.left)},${Math.round(rc.right)})`);
+          const hit = document.elementFromPoint(rc.left + rc.width / 2, rc.top + rc.height / 2);
+          if (!hit || !b.contains(hit)) issues.push(`${name}の中心に当たらない`);
+          if (b.offsetWidth < 44) issues.push(`${name}が${b.offsetWidth}px(<44)`);
+        }
+        const t = document.getElementById('tray').getBoundingClientRect();
+        if (t.height > H * 0.25) issues.push(`トレイ高さ${Math.round(t.height)}px>25%`);
+        return { issues, btn: btns[0].offsetWidth, trayH: Math.round(t.height) };
+      });
+      if (r.issues.length) bad.push(`${w}x${h}: ${r.issues.join(', ')}`);
+      notes.push(`${w}x${h}=${r.btn}px/h${r.trayH}`);
+      await ctx2.close();
+    }
+    report(14, 'レイアウト: iPhone縦横・Slide Over・iPadの12サイズで全ボタンが画面内・押せる・44px以上・トレイ高さ25%以下',
+      bad.length === 0, bad.length ? bad.join(' / ') : notes.join(' '));
+  } catch (e) { report(14, 'レイアウト', false, String(e)); }
 
   /* ---------- まとめ ---------- */
   const lateErrors = consoleErrors.length;
