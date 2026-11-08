@@ -144,10 +144,24 @@
   }
   #wipe.show { opacity: 1; }
 
-  /* 小さい画面（iPhoneなど）ではボタンを縮小 */
-  @media (max-width: 740px) {
-    :root { --btn: 42px; }
+  /* 小さい画面（iPhone横向きなど）ではボタンを縮小（Apple HIG の最小 44pt は保つ） */
+  @media (max-width: 740px), (max-height: 500px) {
+    :root { --btn: 44px; }
     #tray { gap: 8px; padding: 9px 12px; }
+  }
+
+  /* 1列に収まらない幅（iPhone縦向き・iPad の Slide Over など）は 5列×2段 に折り返す。
+     1列だと 546px 必要で、画面外のボタン（あか・ぜんぶ消す）が押せなくなるため */
+  @media (max-width: 560px) {
+    :root { --btn: min(48px, calc((100vw - 16px - 24px - 32px) / 5)); }
+    #tray {
+      display: grid;
+      grid-template-columns: repeat(5, var(--btn));
+      gap: 10px 8px;
+      padding: 12px;
+      border-radius: 32px;
+    }
+    .divider { display: none; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -348,11 +362,17 @@
   select(swatches[0], COLORS[0], BRUSH);
 
   /* ---------- ぜんぶ消す（誤操作防止のため1秒長押し） ---------- */
+  // 「最初に触れた1本の指（またはマウス左ボタン）が1秒押し続けたときだけ」消す。
+  // ・長押し中に触れた他の指は無視する（やり直しも、引き継ぎもしない）
+  // ・その指が離れる／ボタンから大きく外れる／システムに中断されたら取り消す
+  // 複数の指で交互に叩くなど、どの指も1秒押していない操作では発動しない。
   var HOLD_MS = 1000;
+  var HOLD_SLOP = 16;      // ボタンの外へこれ以上ずれたら長押しを取り消す（CSSピクセル）
   var ringCircle = clearBtn.querySelector('.ring circle');
   var RING_LEN = 207;
   var holdStart = null;
   var holdRAF = null;
+  var holdId = null;       // 長押し中の指の identifier（マウスは 'mouse'）。null なら待機中
 
   function clearCanvas() {
     strokes.clear();
@@ -363,6 +383,7 @@
   }
 
   function holdTick(now) {
+    if (holdStart === null) return; // 取り消し済み（念のための防御）
     var p = Math.min((now - holdStart) / HOLD_MS, 1);
     ringCircle.style.strokeDashoffset = RING_LEN * (1 - p);
     if (p >= 1) {
@@ -373,25 +394,69 @@
     }
   }
 
-  function startHold(e) {
-    e.preventDefault();
-    e.stopPropagation();
+  function startHold(id) {
+    if (holdId !== null) return; // 長押し中は他の指を無視（やり直さない）
+    holdId = id;
     holdStart = performance.now();
     holdRAF = requestAnimationFrame(holdTick);
   }
 
+  function endHold(id) {
+    if (id === holdId) cancelHold();
+  }
+
   function cancelHold() {
-    if (holdRAF) cancelAnimationFrame(holdRAF);
+    if (holdRAF !== null) cancelAnimationFrame(holdRAF);
     holdRAF = null;
     holdStart = null;
+    holdId = null;
     ringCircle.style.strokeDashoffset = RING_LEN;
   }
 
-  clearBtn.addEventListener('touchstart', startHold, { passive: false });
-  clearBtn.addEventListener('touchend', cancelHold);
+  function isOutside(x, y) {
+    var r = clearBtn.getBoundingClientRect();
+    return x < r.left - HOLD_SLOP || x > r.right + HOLD_SLOP ||
+           y < r.top - HOLD_SLOP || y > r.bottom + HOLD_SLOP;
+  }
+
+  clearBtn.addEventListener('touchstart', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      // ボタン上で始まった指だけを対象にする（ブラウザによっては、同時に触れた
+      // 別の要素の指も changedTouches に入るため。target は内側の svg のこともある）
+      if (clearBtn.contains(t.target)) startHold(t.identifier);
+    }
+  }, { passive: false });
+
+  // 長押し中の指がボタンから外れたら取り消す
+  clearBtn.addEventListener('touchmove', function (e) {
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      var t = e.changedTouches[i];
+      if (t.identifier === holdId && isOutside(t.clientX, t.clientY)) cancelHold();
+    }
+  });
+
+  clearBtn.addEventListener('touchend', function (e) {
+    for (var i = 0; i < e.changedTouches.length; i++) {
+      endHold(e.changedTouches[i].identifier);
+    }
+  });
+
+  // システムに中断されたとき（通知・OSジェスチャなど）は安全側に倒して取り消す
   clearBtn.addEventListener('touchcancel', cancelHold);
-  clearBtn.addEventListener('mousedown', startHold);
-  window.addEventListener('mouseup', cancelHold);
+
+  clearBtn.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.button === 0) startHold('mouse'); // 左ボタンのみ
+  });
+  window.addEventListener('mousemove', function (e) {
+    if (holdId === 'mouse' && isOutside(e.clientX, e.clientY)) cancelHold();
+  });
+  // どのボタンを離しても取り消す（左を押したまま右クリックした場合も安全側に倒す）
+  window.addEventListener('mouseup', function () { endHold('mouse'); });
 
   /* ---------- iOSのジェスチャを徹底的に抑止 ---------- */
   // Safariのピンチズーム
