@@ -9,6 +9,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="おえかき">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/crayon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
 <style>
   :root {
     --paper: #FFF9F0;          /* 画用紙の色 */
@@ -78,6 +80,30 @@
     box-shadow: 0 0 0 4px #fff, 0 0 0 7px rgba(90, 70, 50, 0.25);
   }
 
+  .rainbow {
+    background: conic-gradient(#ed5145, #ffbd36, #8cc44a, #38b8ca, #6276d9, #dc70af, #ed5145);
+  }
+
+  #speedControl {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    padding: 0 10px;
+    border-radius: 16px;
+    background: var(--paper);
+    box-shadow: 0 2px 10px var(--shadow);
+    color: #403b36;
+    font: 16px sans-serif;
+    white-space: nowrap;
+  }
+  #rainbowSpeed {
+    min-height: 44px;
+    color: inherit;
+    font: inherit;
+    border: 0;
+    background: transparent;
+  }
+
   /* 消しゴム */
   .swatch.eraser {
     background: var(--paper);
@@ -145,20 +171,20 @@
   #wipe.show { opacity: 1; }
 
   /* 小さい画面（iPhone横向きなど）ではボタンを縮小（Apple HIG の最小 44pt は保つ） */
-  @media (max-width: 740px), (max-height: 500px) {
+  @media (max-width: 830px), (max-height: 500px) {
     :root { --btn: 44px; }
-    #tray { gap: 8px; padding: 9px 12px; }
+    #tray { gap: 5px; padding: 9px 8px; }
+    .divider { display: none; }
   }
 
-  /* 1列に収まらない幅（iPhone縦向き・iPad の Slide Over など）は 5列×2段 に折り返す。
-     1列だと 546px 必要で、画面外のボタン（あか・ぜんぶ消す）が押せなくなるため */
+  /* iPhone 縦向きや Slide Over ではパレットを2段にする。 */
   @media (max-width: 560px) {
-    :root { --btn: min(48px, calc((100vw - 16px - 24px - 32px) / 5)); }
+    :root { --btn: clamp(44px, calc((100vw - 54px) / 6), 48px); }
     #tray {
       display: grid;
-      grid-template-columns: repeat(5, var(--btn));
-      gap: 10px 8px;
-      padding: 12px;
+      grid-template-columns: repeat(6, var(--btn));
+      gap: 10px 6px;
+      padding: 12px 8px;
       border-radius: 32px;
     }
     .divider { display: none; }
@@ -175,6 +201,14 @@
 <div id="wipe"></div>
 
 <div id="tray">
+  <label id="speedControl" hidden>にじのはやさ
+    <select id="rainbowSpeed">
+      <option value="0.1" selected>0.1倍</option>
+      <option value="0.25">0.25倍</option>
+      <option value="0.5">0.5倍</option>
+      <option value="1">1倍</option>
+    </select>
+  </label>
   <!-- 色ボタンはJSで生成 -->
   <span class="divider"></span>
   <button id="clearBtn" aria-label="ぜんぶ消す（長押し）">
@@ -197,6 +231,8 @@
   var PAPER = '#FFF9F0';
   var BRUSH = 17;          // 通常の筆の太さ（CSSピクセル）
   var ERASER_SIZE = 46;    // 消しゴムの太さ
+  var RAINBOW = 'rainbow';
+  var HUE_PER_PIXEL = 1;   // 基準の速さでは CSS 360px で色相が一周
 
   // クレヨンらしい発色の8色 + 消しゴム
   var COLORS = [
@@ -215,6 +251,8 @@
   var tray = document.getElementById('tray');
   var clearBtn = document.getElementById('clearBtn');
   var wipe = document.getElementById('wipe');
+  var speedControl = document.getElementById('speedControl');
+  var rainbowSpeed = document.getElementById('rainbowSpeed');
 
   var current = { color: COLORS[0], size: BRUSH };
 
@@ -254,18 +292,48 @@
   resize();
 
   /* ---------- 描画（何本の指でも同時に描ける） ---------- */
-  // 指ごとに軌跡を追跡。ストロークは書き始めの色を最後まで使う。
+  // 指ごとに、書き始めに選ばれていたペンと速さを保持する。
   var strokes = new Map();
 
+  function rainbowColor(hue) {
+    return 'hsl(' + hue + ', 80%, 54%)';
+  }
+
+  function startStroke(x, y) {
+    var s = { x: x, y: y, color: current.color, size: current.size };
+    if (s.color === RAINBOW) {
+      s.hue = 0;
+      s.rate = Number(rainbowSpeed.value) * HUE_PER_PIXEL;
+    }
+    drawDot(x, y, s);
+    return s;
+  }
+
   function drawDot(x, y, s) {
-    ctx.fillStyle = s.color;
+    ctx.fillStyle = s.color === RAINBOW ? rainbowColor(s.hue) : s.color;
     ctx.beginPath();
     ctx.arc(x, y, s.size / 2, 0, Math.PI * 2);
     ctx.fill();
   }
 
   function drawSegment(s, x, y) {
-    ctx.strokeStyle = s.color;
+    if (s.color === RAINBOW) {
+      var distance = Math.hypot(x - s.x, y - s.y);
+      if (distance === 0) return;
+      var delta = distance * s.rate;
+      var gradient = ctx.createLinearGradient(s.x, s.y, x, y);
+      // RGBの変化方向が切り替わる60度ごとに色を置く。
+      var endHue = s.hue + delta;
+      gradient.addColorStop(0, rainbowColor(s.hue));
+      for (var hue = (Math.floor(s.hue / 60) + 1) * 60; hue < endHue; hue += 60) {
+        gradient.addColorStop((hue - s.hue) / delta, rainbowColor(hue));
+      }
+      gradient.addColorStop(1, rainbowColor(endHue));
+      ctx.strokeStyle = gradient;
+      s.hue = endHue % 360;
+    } else {
+      ctx.strokeStyle = s.color;
+    }
     ctx.lineWidth = s.size;
     ctx.beginPath();
     ctx.moveTo(s.x, s.y);
@@ -279,9 +347,7 @@
     e.preventDefault();
     for (var i = 0; i < e.changedTouches.length; i++) {
       var t = e.changedTouches[i];
-      var s = { x: t.clientX, y: t.clientY, color: current.color, size: current.size };
-      strokes.set(t.identifier, s);
-      drawDot(t.clientX, t.clientY, s); // タップだけでも点が残る
+      strokes.set(t.identifier, startStroke(t.clientX, t.clientY));
     }
   }, { passive: false });
 
@@ -306,8 +372,7 @@
   // PCでの動作確認用（マウス）
   var mouseStroke = null;
   canvas.addEventListener('mousedown', function (e) {
-    mouseStroke = { x: e.clientX, y: e.clientY, color: current.color, size: current.size };
-    drawDot(e.clientX, e.clientY, mouseStroke);
+    mouseStroke = startStroke(e.clientX, e.clientY);
   });
   window.addEventListener('mousemove', function (e) {
     if (mouseStroke) drawSegment(mouseStroke, e.clientX, e.clientY);
@@ -320,8 +385,10 @@
   function select(btn, color, size) {
     current.color = color;
     current.size = size;
+    speedControl.hidden = color !== RAINBOW;
     swatches.forEach(function (b) {
       b.classList.toggle('selected', b === btn);
+      b.setAttribute('aria-pressed', String(b === btn));
     });
   }
 
@@ -334,6 +401,7 @@
     }
     btn.addEventListener('touchstart', onPick, { passive: false });
     btn.addEventListener('mousedown', onPick);
+    btn.addEventListener('click', onPick);
   }
 
   var divider = tray.querySelector('.divider');
@@ -345,6 +413,12 @@
     tray.insertBefore(btn, divider);
     addSwatch(btn, color, BRUSH);
   });
+
+  var rainbowBtn = document.createElement('button');
+  rainbowBtn.className = 'swatch rainbow';
+  rainbowBtn.setAttribute('aria-label', 'にじいろペン');
+  tray.insertBefore(rainbowBtn, divider);
+  addSwatch(rainbowBtn, RAINBOW, BRUSH);
 
   // 消しゴム
   var eraserBtn = document.createElement('button');

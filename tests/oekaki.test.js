@@ -39,7 +39,8 @@ function serve() {
       const file = path.join(ROOT, req.url === '/' ? 'index.html' : req.url);
       fs.readFile(file, (err, data) => {
         if (err) { res.writeHead(404); res.end(); return; }
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        const types = { '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
+        res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'text/html; charset=utf-8' });
         res.end(data);
       });
     });
@@ -625,6 +626,24 @@ function makeTouch(cdp, endMode) {
     report(14, `レイアウト: ${viewports.length}サイズ×全スワッチ選択状態で全ボタンが画面内・押せる・44px以上・トレイ高さ25%以下`,
       bad.length === 0, bad.length ? bad.join(' / ') : notes.join(' '));
   } catch (e) { report(14, 'レイアウト', false, String(e)); }
+
+  /* ---------- [15] 虹色ペンの初期値と4段階の速さ ---------- */
+  try {
+    await page.locator('.rainbow').tap();
+    const speed = page.locator('#rainbowSpeed');
+    const initial = await speed.inputValue();
+    const colors = [];
+    for (const [i, rate] of ['0.1', '0.25', '0.5', '1'].entries()) {
+      if (i > 0) await speed.selectOption(rate);
+      const y = 90 + i * 40;
+      await drawLine(1, 100, y, 360, y, 2);
+      colors.push(await px(340, y)); // 始点から240pxで色相は24°, 60°, 120°, 240°
+    }
+    const expected = [[232, 119, 44], [232, 232, 44], [44, 232, 44], [44, 44, 232]];
+    const pass = initial === '0.1' && await speed.locator('option').count() === 4
+      && colors.every((color, i) => near(color, expected[i]));
+    report(15, '虹色ペンの速さと線の色', pass, colors.map(fmt).join(' '));
+  } catch (e) { report(15, '虹色ペン', false, String(e)); }
 
   /* ---------- まとめ ---------- */
   const lateErrors = consoleErrors.length;
