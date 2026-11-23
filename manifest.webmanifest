@@ -1,0 +1,12 @@
+{
+  "name": "おえかき",
+  "short_name": "おえかき",
+  "lang": "ja",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#FFF9F0",
+  "icons": [
+    { "src": "icons/crayon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/crayon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
